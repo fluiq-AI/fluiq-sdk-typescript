@@ -1,5 +1,5 @@
 {
-  "name": "fluiq",
+  "name": "@fluiq/sdk",
   "version": "0.1.0",
   "description": "Fluiq SDK for TypeScript/JavaScript — LLM observability, security, eval, and caching",
   "main": "dist/index.js",
@@ -10,10 +10,14 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build",
     "test:run": "tsx",
     "test:typecheck": "tsc -p tests/tsconfig.json",
     "test:basic": "tsx tests/basic/openai_test1.ts",

@@ -1,0 +1,42 @@
+name: Publish to npm
+
+# Publishes @fluiq/sdk to the npm registry using npm Trusted Publishing (OIDC).
+# No NPM_TOKEN secret is needed — npm verifies this repo + workflow identity and
+# attaches build provenance automatically. Configure the trusted publisher at:
+#   npmjs.com -> @fluiq/sdk -> Settings -> Trusted Publisher -> GitHub Actions
+#   (Workflow filename must be exactly: publish.yml)
+
+on:
+  release:
+    types: [published]   # fires when you publish a GitHub Release
+  workflow_dispatch: {}  # ...or run it manually from the Actions tab
+
+permissions:
+  contents: read
+  id-token: write        # REQUIRED: lets the job mint the OIDC token npm checks
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing requires npm >= 11.5.1; node 22 ships an older npm.
+      - run: npm install -g npm@latest
+
+      # package-lock.json is not committed, so install (not `npm ci`) resolves
+      # dependencies and generates the lockfile in the runner.
+      - run: npm install
+
+      # Build is also run by prepublishOnly, but doing it here surfaces failures
+      # before the publish step.
+      - run: npm run build
+
+      # No token, no --otp, no --access flag (publishConfig handles access).
+      # OIDC authenticates the publish and records provenance.
+      - run: npm publish
