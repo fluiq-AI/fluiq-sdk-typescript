@@ -1,0 +1,81 @@
+{
+  "name": "fluiq",
+  "version": "0.1.0",
+  "description": "Fluiq SDK for TypeScript/JavaScript — LLM observability, security, eval, and caching",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "test:run": "tsx",
+    "test:typecheck": "tsc -p tests/tsconfig.json",
+    "test:basic": "tsx tests/basic/openai_test1.ts",
+    "test:stream": "tsx tests/streaming/openai_streaming_test.ts",
+    "test:security": "tsx tests/security/response_gate_test.ts",
+    "test:vectorstores": "tsx tests/check_vectorstore_wrapping.ts"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.20.0",
+    "ioredis": ">=5.0.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.69.0",
+    "@google/adk": "^1.2.0",
+    "@google/genai": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "@langchain/openai": "^0.3.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@pinecone-database/pinecone": "^7.2.0",
+    "@qdrant/js-client-rest": "^1.18.0",
+    "@types/node": "^20.0.0",
+    "chromadb": "^3.4.3",
+    "dotenv": "^16.4.0",
+    "faiss-node": "^0.5.1",
+    "ioredis": "^5.4.0",
+    "openai": "^4.70.0",
+    "rimraf": "^5.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0",
+    "voyageai": "^0.0.4",
+    "weaviate-client": "^3.13.1",
+    "zod": "^3.23.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "llm",
+    "observability",
+    "tracing",
+    "openai",
+    "anthropic",
+    "fluiq"
+  ]
+}
