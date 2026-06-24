@@ -17,6 +17,7 @@ export interface FluiqConfig {
   eval_metrics: string[] | null;
   eval_thresholds: Record<string, number>;
   eval_judge_model: string;
+  eval_custom_judges: Record<string, number>;
 }
 
 export const _config: FluiqConfig = {
@@ -34,6 +35,7 @@ export const _config: FluiqConfig = {
   eval_metrics: null,
   eval_thresholds: {},
   eval_judge_model: "claude-haiku-4-5-20251001",
+  eval_custom_judges: {},
 };
 
 /**

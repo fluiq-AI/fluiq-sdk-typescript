@@ -47,6 +47,7 @@ export async function callEvaluateBlock(
     const metrics = _config.eval_metrics ?? ["hallucination", "relevance"];
     const judgeModel = _config.eval_judge_model;
     const thresholds = _config.eval_thresholds;
+    const customJudges = _config.eval_custom_judges;
 
     const base = `${_config.endpoint}/${_config.version}`;
     const response = await axios.post(
@@ -61,6 +62,7 @@ export async function callEvaluateBlock(
         metrics: [...metrics],
         judge_model: judgeModel,
         thresholds: { ...thresholds },
+        custom_judges: { ...customJudges },
       },
       { timeout: 30_000, validateStatus: () => true }
     );

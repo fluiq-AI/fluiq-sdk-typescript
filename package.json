@@ -1,6 +1,6 @@
 {
   "name": "@fluiq/sdk",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Fluiq SDK for TypeScript/JavaScript — LLM observability, security, eval, and caching",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

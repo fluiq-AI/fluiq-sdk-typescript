@@ -72,6 +72,7 @@ export async function logTrace(data: Record<string, unknown>): Promise<void> {
           metrics: _config.eval_metrics ?? ["hallucination", "relevance"],
           judge_model: _config.eval_judge_model,
           thresholds: _config.eval_thresholds,
+          custom_judges: _config.eval_custom_judges,
         };
       }
     }
@@ -103,7 +104,7 @@ export async function logTrace(data: Record<string, unknown>): Promise<void> {
         const { callEvaluateBlock } = require("./evals/client") as typeof import("./evals/client");
         const scores = await callEvaluateBlock(data);
         if (scores) {
-          const thresholds = _config.eval_thresholds;
+          const thresholds = { ..._config.eval_thresholds, ..._config.eval_custom_judges };
           const failures: Record<string, number> = {};
           for (const [metric, score] of Object.entries(scores)) {
             if (score < (thresholds[metric] ?? 0.0)) {

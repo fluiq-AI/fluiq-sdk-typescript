@@ -116,6 +116,16 @@ export interface EvalOptions {
   mode?: "warn" | "block";
   /** The model Fluiq uses as judge. Defaults to "claude-haiku-4-5-20251001". */
   judgeModel?: string;
+  /**
+   * Your own LLM-as-judge prompts, mapping a saved judge prompt's slug to its
+   * pass/fail threshold, e.g. { "refund-policy": 0.8 }.
+   *
+   * Create a judge prompt in the dashboard (Prompts → Save as Judge). Its
+   * template uses $question / $answer / $context placeholders and should ask
+   * the model to return a JSON object with a numeric `score` (0–1) and a
+   * `reason`. Each judge is scored on every LLM response like a built-in metric.
+   */
+  customJudges?: Record<string, number>;
 }
 
 /**
@@ -137,6 +147,7 @@ export function fluiqEval(options: EvalOptions = {}): void {
   _config.eval_thresholds = options.thresholds ? { ...options.thresholds } : {};
   _config.eval_metrics = options.metrics ? [...options.metrics] : ["hallucination", "relevance"];
   _config.eval_judge_model = options.judgeModel ?? "claude-haiku-4-5-20251001";
+  _config.eval_custom_judges = options.customJudges ? { ...options.customJudges } : {};
 }
 
 // ---------------------------------------------------------------------------
