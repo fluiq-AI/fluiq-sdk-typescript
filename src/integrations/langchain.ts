@@ -17,6 +17,14 @@ import {
   exitLangchainLlm,
 } from "./shared/context";
 import { preCallGuard } from "./shared/securityGate";
+import {
+  currentGraphName,
+  predecessorNames,
+  registerGraphEdges,
+  resolveJoinParents,
+  resolveJoinParentsByEdges,
+  runWithGraphName,
+} from "./shared/langgraphEdges";
 
 // ---------------------------------------------------------------------------
 // LangGraph metadata extraction
@@ -207,6 +215,8 @@ function _extractToolCalls(response: unknown): unknown[] | null {
 interface RunState {
   start: number;
   parentId: string | null;
+  parentIds?: string[] | null;
+  lgPredecessors?: string[] | null;
   model?: string | null;
   messages?: unknown;
   prompts?: unknown;
@@ -276,8 +286,71 @@ export class FluiqCallbackHandler {
     const meta = state.metadata;
     const lg = _langgraphMeta(meta);
     fields["integration"] = fields["integration"] ?? _integrationFor(meta);
-    if (lg != null) fields["langgraph"] = fields["langgraph"] ?? lg;
+    if (lg != null) {
+      // Stamp the node's static predecessors (node names) so the dashboard can
+      // draw the real DAG, including the fan-out edges that parent_ids (fan-in
+      // only) can't express.
+      const preds = state.lgPredecessors;
+      const lgOut = preds && preds.length > 0 ? { ...lg, predecessors: preds } : lg;
+      fields["langgraph"] = fields["langgraph"] ?? lgOut;
+    }
     this._emit(fields);
+  }
+
+  // -------------------------------------------------------------------------
+  // LangGraph DAG (fan-in / join) tracking — mirrors the Python handler.
+  // -------------------------------------------------------------------------
+
+  /** Per-graph-run registry of langgraph node_name -> run_id, keyed by thread. */
+  private _lgNodes: Map<string, Map<string, string>> = new Map();
+
+  private _lgThreadKey(metadata: unknown, parentRunId?: string | null): string {
+    if (metadata && typeof metadata === "object") {
+      const tid = (metadata as Record<string, unknown>)["thread_id"];
+      if (tid) return `t:${String(tid)}`;
+    }
+    return parentRunId ? `p:${parentRunId}` : "p:root";
+  }
+
+  private _registerLgNode(tkey: string, nodeName: string | undefined, runId: string): void {
+    if (!tkey || !nodeName) return;
+    let reg = this._lgNodes.get(tkey);
+    if (!reg) {
+      if (this._lgNodes.size > 256) this._lgNodes.clear(); // bound memory; fail-open
+      reg = new Map();
+      this._lgNodes.set(tkey, reg);
+    }
+    reg.set(nodeName, runId);
+  }
+
+  /** Resolve multi-parent ids for a LangGraph join node (or null). */
+  private _lgJoinParents(
+    metadata: unknown,
+    runId: string,
+    parentRunId?: string | null
+  ): string[] | null {
+    const lg = _langgraphMeta(metadata);
+    const nodeName = lg ? (lg["langgraph_node"] as string | undefined) : undefined;
+    if (!nodeName) return null;
+    const tkey = this._lgThreadKey(metadata, parentRunId);
+    const registry = this._lgNodes.get(tkey) ?? new Map<string, string>();
+    // Prefer the static edge graph captured at compile (reliable regardless of
+    // LangGraph's trigger encoding); fall back to trigger-name matching.
+    let parentIds = resolveJoinParentsByEdges(registry, nodeName);
+    if (parentIds == null) {
+      parentIds = resolveJoinParents(registry, nodeName, lg ? lg["langgraph_triggers"] : undefined);
+    }
+    this._registerLgNode(tkey, nodeName, runId);
+    return parentIds;
+  }
+
+  /** Static predecessor node names for this LangGraph node (or null). */
+  private _lgPredecessors(metadata: unknown): string[] | null {
+    const lg = _langgraphMeta(metadata);
+    const nodeName = lg ? (lg["langgraph_node"] as string | undefined) : undefined;
+    if (!nodeName) return null;
+    const preds = predecessorNames(nodeName);
+    return preds.length > 0 ? preds : null;
   }
 
   private _emitStart(opts: {
@@ -444,9 +517,17 @@ export class FluiqCallbackHandler {
     _tags?: string[],
     metadata?: unknown
   ): void {
-    const name = _componentName(serialized);
+    let name = _componentName(serialized);
+    // LangGraph's top-level graph run arrives with no serialized name — give the
+    // parent-less container the graph's name so it has an agent identity (else
+    // it's invisible in the Agents view). Only the outermost chain.
+    if (!name && parentRunId === undefined) {
+      name = currentGraphName();
+    }
     this._start(runId, {
       parentId: this._parent(parentRunId),
+      parentIds: this._lgJoinParents(metadata, runId, parentRunId),
+      lgPredecessors: this._lgPredecessors(metadata),
       name,
       input: inputs,
       metadata,
@@ -471,6 +552,7 @@ export class FluiqCallbackHandler {
       latency: end - state.start,
       trace_id: runId,
       parent_id: state.parentId ?? this._parent(parentRunId),
+      parent_ids: state.parentIds ?? undefined,
       success: true,
     });
   }
@@ -485,6 +567,7 @@ export class FluiqCallbackHandler {
       latency: end - state.start,
       trace_id: runId,
       parent_id: state.parentId ?? this._parent(parentRunId),
+      parent_ids: state.parentIds ?? undefined,
       success: false,
     });
   }
@@ -654,7 +737,97 @@ export function patchLangchain(): void {
   }
 }
 
+let _compilePatched = false;
+
+/**
+ * Capture each StateGraph's static edges at compile time so the callback handler
+ * can resolve fan-in (join) nodes to their real predecessors — LangGraph's
+ * per-node `langgraph_triggers` name the destination channel, not the source
+ * nodes, so trigger parsing alone can't see a join. Idempotent and fail-open.
+ */
+function _patchStateGraphCompile(): void {
+  if (_compilePatched) return;
+  try {
+    const mod = require("@langchain/langgraph") as {
+      StateGraph?: { prototype?: Record<string, unknown> };
+    };
+    const StateGraph = mod.StateGraph;
+    const proto = StateGraph?.prototype;
+    if (!proto || proto["_fluiqCompilePatched"]) return;
+    const orig = proto["compile"];
+    if (typeof orig !== "function") return;
+    proto["compile"] = function (this: { edges?: unknown }, ...args: unknown[]): unknown {
+      try {
+        registerGraphEdges(this.edges);
+      } catch {
+        /* ignore */
+      }
+      const compiled = (orig as (...a: unknown[]) => unknown).apply(this, args);
+      try {
+        _tagGraphName(compiled, this);
+      } catch {
+        /* ignore */
+      }
+      return compiled;
+    };
+    proto["_fluiqCompilePatched"] = true;
+    _compilePatched = true;
+  } catch {
+    // @langchain/langgraph not installed / different shape — fall back to
+    // trigger-based join detection.
+  }
+}
+
+/**
+ * Wrap a compiled graph's invoke/stream to publish its name during each run.
+ *
+ * The top-level graph container reaches the callback handler with no serialized
+ * name, so on its own it has no agent identity and never shows in the Agents
+ * view. We publish the compiled graph's `name` ("LangGraph" by default) via
+ * AsyncLocalStorage for the duration of each invocation; the handler names the
+ * parent-less container chain from it. Nested sub-graph runs are unaffected —
+ * the handler only reads the name for the outermost (parent-less) chain.
+ */
+/**
+ * Build `LangGraph(node_a, node_b, ...)` from the graph's node names — mirrors
+ * CrewAI's `Crew(agent1, agent2, ...)` identity so the Agents view shows *which*
+ * graph ran. Node order follows declaration; START/END sentinels are dropped.
+ * Falls back to the compiled graph's own `name` when nodes can't be read.
+ */
+function _graphDisplayName(graph: unknown, compiled: Record<string, unknown>): string {
+  const fallback = (typeof compiled["name"] === "string" && compiled["name"]) || "LangGraph";
+  for (const src of [graph, compiled]) {
+    const raw = (src as Record<string, unknown> | null)?.["nodes"];
+    let keys: string[] = [];
+    if (raw instanceof Map) keys = [...raw.keys()].map((k) => String(k));
+    else if (raw && typeof raw === "object") keys = Object.keys(raw as object);
+    const names = keys.filter((k) => k !== "__start__" && k !== "__end__");
+    if (names.length) return `LangGraph(${names.join(", ")})`;
+  }
+  return fallback;
+}
+
+function _tagGraphName(compiled: unknown, graph?: unknown): void {
+  const c = compiled as Record<string, unknown> | null;
+  if (!c || c["_fluiqNameTagged"]) return;
+  const name = _graphDisplayName(graph, c);
+  for (const attr of ["invoke", "stream", "ainvoke", "astream"]) {
+    const fn = c[attr];
+    if (typeof fn !== "function") continue;
+    const orig = fn as (...a: unknown[]) => unknown;
+    c[attr] = function (this: unknown, ...a: unknown[]): unknown {
+      return runWithGraphName(name as string, () => orig.apply(this, a));
+    };
+  }
+  try {
+    Object.defineProperty(c, "_fluiqNameTagged", { value: true, enumerable: false });
+  } catch {
+    /* ignore */
+  }
+}
+
 /** LangGraph executes through LangChain Core's callbacks; same handler, idempotent. */
 export function patchLangGraph(): void {
   patchLangchain();
+  _patchStateGraphCompile();
 }
