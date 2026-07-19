@@ -17,6 +17,7 @@ import {
   exitLangchainLlm,
 } from "./shared/context";
 import { preCallGuard } from "./shared/securityGate";
+import { FluiqSecurityError } from "../exceptions";
 import {
   currentGraphName,
   predecessorNames,
@@ -384,7 +385,7 @@ export class FluiqCallbackHandler {
   // LLM callbacks
   // -------------------------------------------------------------------------
 
-  handleLLMStart(
+  async handleLLMStart(
     serialized: unknown,
     prompts: string[],
     runId: string,
@@ -393,9 +394,17 @@ export class FluiqCallbackHandler {
     _tags?: string[],
     metadata?: unknown,
     _runName?: string
-  ): void {
+  ): Promise<void> {
     const promptJoined = prompts.filter((p) => typeof p === "string").join("\n");
-    try { preCallGuard({ prompt: promptJoined }); } catch { /* fail open for tracing */ }
+    // Must await: preCallGuard is async, so an unawaited call turns a block into
+    // an unhandled rejection the sync catch never sees — block mode would never
+    // fire. Re-throw a real block; swallow only network/infra failures (fail open).
+    try {
+      await preCallGuard({ prompt: promptJoined });
+    } catch (secExc) {
+      if (secExc instanceof FluiqSecurityError) throw secExc;
+      /* fail open for tracing */
+    }
 
     enterLangchainLlm();
     const ip = (extraParams as Record<string, unknown> | null)?.["invocation_params"] as Record<string, unknown> | null;
@@ -418,7 +427,7 @@ export class FluiqCallbackHandler {
     });
   }
 
-  handleChatModelStart(
+  async handleChatModelStart(
     serialized: unknown,
     messages: unknown[][],
     runId: string,
@@ -427,7 +436,7 @@ export class FluiqCallbackHandler {
     _tags?: string[],
     metadata?: unknown,
     _runName?: string
-  ): void {
+  ): Promise<void> {
     const flat: Record<string, unknown>[] = [];
     for (const msgList of messages) {
       const list = Array.isArray(msgList) ? msgList : [msgList];
@@ -446,7 +455,13 @@ export class FluiqCallbackHandler {
         flat.push({ role: "user", content: String(content) });
       }
     }
-    try { if (flat.length) preCallGuard({ messages: flat }); } catch { /* fail open */ }
+    // Await so a block propagates instead of becoming an unhandled rejection.
+    try {
+      if (flat.length) await preCallGuard({ messages: flat });
+    } catch (secExc) {
+      if (secExc instanceof FluiqSecurityError) throw secExc;
+      /* fail open */
+    }
 
     enterLangchainLlm();
     const ip = (extraParams as Record<string, unknown> | null)?.["invocation_params"] as Record<string, unknown> | null;

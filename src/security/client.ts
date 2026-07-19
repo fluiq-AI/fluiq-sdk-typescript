@@ -11,8 +11,9 @@
  * it and fans out an sdk_security job to the evaluator Kafka topic.
  */
 import axios from "axios";
-import { _config } from "../config";
+import { _config, authHeaders } from "../config";
 import { FluiqSecurityError } from "../exceptions";
+import { currentLlmTraceId } from "../integrations/shared/context";
 
 function _baseUrl(): string {
   return `${_config.endpoint}/${_config.version}`;
@@ -21,10 +22,18 @@ function _baseUrl(): string {
 export async function preCallCheck(promptText: string): Promise<void> {
   const mode = _config.secure_mode;
   try {
+    // Authenticate via the Bearer header (like every other SDK request) rather
+    // than only putting the key in the body — bodies are far more likely to be
+    // captured by proxy/APM logs. Send trace_id + guardrail for Python parity so
+    // the server can honor a custom guardrail and publish the blocked trace.
     const response = await axios.post(
       `${_baseUrl()}/secure/check`,
-      { api_key: _config.api_key, prompt: promptText },
-      { timeout: 2000, validateStatus: () => true }
+      {
+        prompt: promptText,
+        trace_id: currentLlmTraceId(),
+        guardrail: _config.secure_guardrail,
+      },
+      { timeout: 2000, validateStatus: () => true, headers: authHeaders() }
     );
 
     if (response.status === 402) {
