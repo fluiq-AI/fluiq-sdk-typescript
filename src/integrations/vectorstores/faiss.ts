@@ -9,8 +9,6 @@
 import { TraceType } from "../shared/models";
 import {
   truncateIds,
-  makeSyncCachedWrapper,
-  makeSyncInvalidatingWrapper,
   makeSyncWrapper,
 } from "./utils";
 
@@ -35,15 +33,6 @@ function _accessor(inst: Record<string, unknown>, method: string, prop: string):
 
 function _indexType(inst: Record<string, unknown>): string {
   return (inst.constructor as { name?: string })?.name ?? "Index";
-}
-
-function _faissTarget(
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  instance: unknown
-): string {
-  const inst = instance as Record<string, unknown>;
-  return `${_indexType(inst)}:${_accessor(inst, "getDimension", "d") ?? ""}`;
 }
 
 function _target(instance: unknown): Record<string, unknown> {
@@ -218,70 +207,6 @@ function _summarizeReset(
   return { target: _target(instance), mutation: {} };
 }
 
-async function _searchCacheKey(
-  args: unknown[],
-  kwargs: Record<string, unknown>,
-  instance: unknown
-): Promise<string> {
-  const x = kwargs["x"] ?? (args[0] ?? null);
-  const k = kwargs["k"] ?? (args.length > 1 ? args[1] : null);
-  const inst = instance as Record<string, unknown>;
-  const idxType = (inst.constructor as { name?: string }).name ?? "Index";
-  const dim = inst["d"] ?? null;
-  let qList: unknown;
-  try {
-    qList = typeof (x as Record<string, unknown>)["tolist"] === "function"
-      ? ((x as Record<string, unknown>)["tolist"] as () => unknown)()
-      : Array.from(x as Iterable<unknown>);
-  } catch {
-    qList = String(x);
-  }
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return vectorstoreCacheKey("faiss", `${idxType}:${dim}`, qList, k, null);
-}
-
-function _searchRawResult(
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  _instance: unknown,
-  response: unknown
-): Record<string, unknown> | null {
-  // faiss-node: { distances, labels }
-  if (response && typeof response === "object" && !Array.isArray(response) && "labels" in (response as object)) {
-    const r = response as Record<string, unknown>;
-    return { distances: r["distances"] ?? null, labels: r["labels"] ?? null };
-  }
-  // Legacy bindings: [D, I]
-  if (!Array.isArray(response) || response.length < 2) return null;
-  const D = response[0];
-  const I = response[1];
-  try {
-    return {
-      distances: typeof (D as Record<string, unknown>)["tolist"] === "function"
-        ? ((D as Record<string, unknown>)["tolist"] as () => unknown)()
-        : Array.from(D as Iterable<unknown>),
-      indices: typeof (I as Record<string, unknown>)["tolist"] === "function"
-        ? ((I as Record<string, unknown>)["tolist"] as () => unknown)()
-        : Array.from(I as Iterable<unknown>),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function _searchMock(
-  cachedResult: Record<string, unknown>,
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  _instance: unknown
-): unknown {
-  // Reconstruct faiss-node's { distances, labels } return shape from the cache.
-  return {
-    distances: cachedResult["distances"] ?? [],
-    labels: cachedResult["labels"] ?? cachedResult["indices"] ?? [],
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Instance decoration
 // ---------------------------------------------------------------------------
@@ -293,7 +218,7 @@ function _searchMock(
 // locked prototype methods. So we wrap the *constructor* on the module exports
 // and decorate each instance as it is created.
 
-const _INVALIDATING: [string, string, typeof _summarizeAdd][] = [
+const _MUTATING: [string, string, typeof _summarizeAdd][] = [
   ["add", "add", _summarizeAdd],
   ["add_with_ids", "add_with_ids", _summarizeAddWithIds],
   ["remove_ids", "remove_ids", _summarizeRemoveIds],
@@ -311,21 +236,21 @@ function _define(inst: Record<string, unknown>, name: string, fn: unknown): void
   }
 }
 
-/** Installs traced/cached method wrappers as own properties on a fresh index instance. */
+/** Installs traced method wrappers as own properties on a fresh index instance. */
 function _decorateInstance(inst: Record<string, unknown>, proto: Record<string, unknown>): void {
   if (typeof proto["search"] === "function") {
-    _define(inst, "search", makeSyncCachedWrapper(
+    _define(inst, "search", makeSyncWrapper(
       proto["search"] as (this: unknown, ...args: unknown[]) => unknown,
-      TraceType.FAISS, "search", _summarizeSearch, _searchCacheKey, _searchMock, _searchRawResult
+      TraceType.FAISS, "search", _summarizeSearch
     ));
   }
   const definedApis = new Set<string>();
-  for (const [attr, api, summarize] of _INVALIDATING) {
+  for (const [attr, api, summarize] of _MUTATING) {
     if (typeof proto[attr] === "function" && !definedApis.has(attr)) {
       definedApis.add(attr);
-      _define(inst, attr, makeSyncInvalidatingWrapper(
+      _define(inst, attr, makeSyncWrapper(
         proto[attr] as (this: unknown, ...args: unknown[]) => unknown,
-        TraceType.FAISS, api, summarize, _faissTarget
+        TraceType.FAISS, api, summarize
       ));
     }
   }

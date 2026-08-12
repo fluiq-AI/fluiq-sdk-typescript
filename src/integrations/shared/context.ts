@@ -8,13 +8,12 @@ import { AsyncLocalStorage } from "async_hooks";
 export interface TraceCtx {
   parentId: string | null;
   llmTraceId: string | null;
-  innerCacheHit: boolean;
 }
 
 const _storage = new AsyncLocalStorage<TraceCtx>();
 
 function _getCtx(): TraceCtx {
-  return _storage.getStore() ?? { parentId: null, llmTraceId: null, innerCacheHit: false };
+  return _storage.getStore() ?? { parentId: null, llmTraceId: null };
 }
 
 export function currentParentId(): string | null {
@@ -23,15 +22,6 @@ export function currentParentId(): string | null {
 
 export function currentLlmTraceId(): string | null {
   return _getCtx().llmTraceId;
-}
-
-export function isInnerCacheHit(): boolean {
-  return _getCtx().innerCacheHit;
-}
-
-export function markInnerCacheHit(): void {
-  const ctx = _storage.getStore();
-  if (ctx) ctx.innerCacheHit = true;
 }
 
 /**
@@ -69,8 +59,7 @@ export function exitLangchainLlm(): void {
 
 /**
  * Run `fn` in a child context where `traceId` is the new parentId.
- * Returns both the result and the child context so callers can read
- * innerCacheHit after `fn` returns.
+ * Returns both the result and the child context.
  */
 export function runInChildContext<T>(
   traceId: string,
@@ -80,7 +69,6 @@ export function runInChildContext<T>(
   const childCtx: TraceCtx = {
     parentId: traceId,
     llmTraceId: parent.llmTraceId,
-    innerCacheHit: false,
   };
   const promise = _storage.run(childCtx, async () => {
     const result = await fn();
@@ -121,6 +109,6 @@ export async function withLlmTraceId<T>(traceId: string, fn: () => T | Promise<T
 export function runInRootContext<T>(fn: () => Promise<T>): Promise<T> {
   const existing = _storage.getStore();
   if (existing) return fn();
-  const rootCtx: TraceCtx = { parentId: null, llmTraceId: null, innerCacheHit: false };
+  const rootCtx: TraceCtx = { parentId: null, llmTraceId: null };
   return _storage.run(rootCtx, fn);
 }

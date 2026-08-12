@@ -10,7 +10,6 @@
 import { logTrace } from "../tracer";
 import { TraceType } from "./shared/models";
 import { currentParentId } from "./shared/context";
-import { preCallOptimizeEmbedding } from "./shared/optimizeGate";
 
 interface VoyageClientCtor {
   prototype: Record<string, unknown>;
@@ -53,12 +52,6 @@ function _serializeEmbeddings(result: unknown): { data: Array<{ values: unknown;
 }
 
 /** Rebuild a Voyage-shaped response object from a cached payload. */
-function _buildCachedResponse(payload: Record<string, unknown>): Record<string, unknown> {
-  const response = payload["response"] as { data?: Array<{ values: unknown; index: number }> } | undefined;
-  const rows = response?.data ?? [];
-  const data = rows.map((row) => ({ embedding: row.values, index: row.index, object: "embedding" }));
-  return { data, _fluiqCached: true, _fluiqPayload: payload };
-}
 
 function _patchMethod(
   proto: Record<string, unknown>,
@@ -85,25 +78,6 @@ export function patchVoyage(): void {
       const model = (req["model"] ?? rest[0] ?? "") as string;
 
       const start = Date.now() / 1000;
-      const cacheParams = { model, input };
-
-      const cached = await preCallOptimizeEmbedding(cacheParams);
-      if (cached != null) {
-        await logTrace({
-          type: "llm",
-          integration: TraceType.Voyage,
-          api: "embeddings",
-          model,
-          input,
-          response: cached["response"] ?? null,
-          latency: Date.now() / 1000 - start,
-          parent_id: currentParentId(),
-          _cache_hit: true,
-          tokens: null,
-        });
-        return _buildCachedResponse(cached);
-      }
-
       const result = await original.call(this, request, ...rest);
       const serialized = _serializeEmbeddings(result);
       await logTrace({

@@ -23,11 +23,10 @@ import {
   buildMatch,
   captureMatches,
   captureQueryTexts,
+  makeAsyncWrapper,
   safeJsonable,
   truncateIds,
   vectorDim,
-  makeAsyncCachedWrapper,
-  makeAsyncInvalidatingWrapper,
 } from "./utils";
 
 // Non-enumerable stamps we attach to each query/data object so the summarizers
@@ -77,14 +76,6 @@ function _arg0(positional: unknown[], kwargs: Record<string, unknown>): unknown 
   return positional.length > 0 ? positional[0] : kwargs;
 }
 
-function _weaviateTargetFn(
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  instance: unknown
-): string {
-  return _collectionName(instance) || "";
-}
-
 function _propertiesText(props: unknown): string | null {
   if (typeof props !== "object" || props === null) return null;
   const p = props as Record<string, unknown>;
@@ -122,22 +113,6 @@ function _attachMatches(out: Record<string, unknown>, response: unknown): void {
       score_max: scores.length > 0 ? Math.max(...scores) : null,
     };
   }
-}
-
-function _objectsMock(
-  cachedResult: Record<string, unknown>,
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  _instance: unknown
-): unknown {
-  const items = ((cachedResult["matches"] as Record<string, unknown> | null)?.["items"] as Record<string, unknown>[] | null) ?? [];
-  const objects = items.map((m) => ({
-    uuid: m["id"],
-    metadata: { score: m["score"], distance: null },
-    properties: m["metadata"] ?? {},
-    vector: null,
-  }));
-  return { objects };
 }
 
 function _objVectorDim(obj: Record<string, unknown> | null | undefined): number | null {
@@ -332,52 +307,13 @@ function _summarizeUpdate(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Cache key functions
-// ---------------------------------------------------------------------------
-
-function _cacheKey(integration: string, instance: unknown, query: unknown, limit: unknown, extra: unknown): Promise<string> {
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return Promise.resolve(vectorstoreCacheKey(integration, _collectionName(instance), query, limit as number, extra));
-}
-
-async function _nearVectorKey(positional: unknown[], kwargs: Record<string, unknown>, instance: unknown): Promise<string> {
-  const opts = _opts(positional, kwargs, 1);
-  return _cacheKey("weaviate", instance, positional[0] ?? null, opts["limit"], [opts["filters"], opts["targetVector"]]);
-}
-
-async function _nearTextKey(positional: unknown[], kwargs: Record<string, unknown>, instance: unknown): Promise<string> {
-  const opts = _opts(positional, kwargs, 1);
-  return _cacheKey("weaviate", instance, positional[0] ?? null, opts["limit"], [opts["filters"], opts["targetVector"]]);
-}
-
-async function _hybridKey(positional: unknown[], kwargs: Record<string, unknown>, instance: unknown): Promise<string> {
-  const opts = _opts(positional, kwargs, 1);
-  return _cacheKey("weaviate", instance, positional[0] ?? null, opts["limit"], [opts["alpha"], opts["filters"]]);
-}
-
-async function _bm25Key(positional: unknown[], kwargs: Record<string, unknown>, instance: unknown): Promise<string> {
-  const opts = _opts(positional, kwargs, 1);
-  return _cacheKey("weaviate", instance, positional[0] ?? null, opts["limit"], opts["filters"]);
-}
-
-async function _fetchObjectsKey(positional: unknown[], kwargs: Record<string, unknown>, instance: unknown): Promise<string> {
-  const opts = _opts(positional, kwargs, 0);
-  return _cacheKey("weaviate", instance, null, opts["limit"], [opts["offset"], opts["filters"]]);
-}
-
-// ---------------------------------------------------------------------------
-// Query and data op tables
-// ---------------------------------------------------------------------------
-
-// `api` values are kept snake_case to match the Python SDK's trace schema.
 const QUERY_OPS = [
-  ["nearVector", "near_vector", _summarizeNearVector, _nearVectorKey],
-  ["nearText", "near_text", _summarizeNearText, _nearTextKey],
-  ["hybrid", "hybrid", _summarizeHybrid, _hybridKey],
-  ["bm25", "bm25", _summarizeBm25, _bm25Key],
-  ["fetchObjects", "fetch_objects", _summarizeFetchObjects, _fetchObjectsKey],
-] as [string, string, typeof _summarizeNearVector, typeof _nearVectorKey][];
+  ["nearVector", "near_vector", _summarizeNearVector],
+  ["nearText", "near_text", _summarizeNearText],
+  ["hybrid", "hybrid", _summarizeHybrid],
+  ["bm25", "bm25", _summarizeBm25],
+  ["fetchObjects", "fetch_objects", _summarizeFetchObjects],
+] as [string, string, typeof _summarizeNearVector][];
 
 const DATA_OPS = [
   ["insert", "insert", _summarizeInsert],
@@ -401,12 +337,12 @@ function _stamp(obj: Record<string, unknown>, collection: unknown, tenant: unkno
 }
 
 function _decorateQuery(obj: Record<string, unknown>): void {
-  for (const [attr, api, summarize, keyFn] of QUERY_OPS) {
+  for (const [attr, api, summarize] of QUERY_OPS) {
     const orig = obj[attr];
     if (typeof orig === "function") {
-      obj[attr] = makeAsyncCachedWrapper(
+      obj[attr] = makeAsyncWrapper(
         orig as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.Weaviate, api, summarize, keyFn, _objectsMock
+        TraceType.Weaviate, api, summarize
       );
     }
   }
@@ -416,9 +352,9 @@ function _decorateData(obj: Record<string, unknown>): void {
   for (const [attr, api, summarize] of DATA_OPS) {
     const orig = obj[attr];
     if (typeof orig === "function") {
-      obj[attr] = makeAsyncInvalidatingWrapper(
+      obj[attr] = makeAsyncWrapper(
         orig as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.Weaviate, api, summarize, _weaviateTargetFn
+        TraceType.Weaviate, api, summarize
       );
     }
   }

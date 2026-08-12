@@ -41,32 +41,10 @@ export async function logTrace(data: Record<string, unknown>): Promise<void> {
       };
     }
 
-    const isCacheHit = data["_cache_hit"] as boolean | undefined;
-    delete data["_cache_hit"];
-
-    if (isCacheHit) {
-      data["cache_hit"] = true;
-    } else if (
-      _config.optimize &&
-      (data["type"] === "llm" || data["type"] === "function") &&
-      data["latency"] != null
-    ) {
-      data["cache_hit"] = false;
-    }
-
-    if (_config.optimize && !isCacheHit) {
-      try {
-        const { populateCache } = require("./optimization/client") as typeof import("./optimization/client");
-        populateCache(data);
-      } catch (_) {
-        // ignore
-      }
-    }
-
     const responseStr = _extractResponseStr(data);
 
     // Warn mode: embed eval config so /ingest fans out to the eval worker
-    if (_config.eval && !isCacheHit && data["type"] === "llm" && responseStr.trim()) {
+    if (_config.eval && data["type"] === "llm" && responseStr.trim()) {
       if (_config.eval_mode === "warn") {
         data["_eval_config"] = {
           metrics: _config.eval_metrics ?? ["hallucination", "relevance"],
@@ -99,7 +77,7 @@ export async function logTrace(data: Record<string, unknown>): Promise<void> {
     }
 
     // Block mode: synchronous /evaluate call after trace is stored
-    if (_config.eval && !isCacheHit && _config.eval_mode === "block") {
+    if (_config.eval && _config.eval_mode === "block") {
       if (data["type"] === "llm" && responseStr.trim()) {
         const { callEvaluateBlock } = require("./evals/client") as typeof import("./evals/client");
         const scores = await callEvaluateBlock(data);

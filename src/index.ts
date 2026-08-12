@@ -65,37 +65,6 @@ export function instrument(options: InstrumentOptions = {}): void {
 }
 
 // ---------------------------------------------------------------------------
-// optimize()
-// ---------------------------------------------------------------------------
-
-export interface OptimizeOptions {
-  /**
-   * "cache"   (default) — full caching enabled. Repeated LLM calls that match
-   *                        the backend profile are intercepted and served from Redis.
-   * "observe"            — no interception. Records what would have been a hit.
-   */
-  mode?: "cache" | "observe";
-}
-
-/**
- * Activate trace-driven Redis caching (requires Team plan or above).
- * Must be called after instrument().
- *
- * Fluiq's backend analyses your historical traces to determine which LLM
- * calls are repeated most often and provisions a dedicated Redis instance.
- * On the first call after optimize() the SDK fetches the cache profile and
- * begins serving repeated prompts from cache — saving both latency and cost.
- */
-export function optimize(options: OptimizeOptions = {}): void {
-  const mode = options.mode ?? "cache";
-  if (mode !== "cache" && mode !== "observe") {
-    throw new Error(`fluiq.optimize() mode must be 'cache' or 'observe', got '${mode}'`);
-  }
-  _config.optimize = true;
-  _config.optimize_mode = mode;
-}
-
-// ---------------------------------------------------------------------------
 // eval()
 // ---------------------------------------------------------------------------
 
@@ -220,43 +189,15 @@ export async function fetchPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// lookupToolResult()
-// ---------------------------------------------------------------------------
-
-/**
- * Return a cached tool result, or `null` if not in cache.
- *
- * `args` can be an object or a JSON string. Keys are sorted before hashing so
- * argument order does not matter.
- *
- * @example
- * let result = await fluiq.lookupToolResult("get_weather", { location: "London" });
- * if (result == null) result = await callWeatherApi("London");
- */
-export async function lookupToolResult(
-  toolName: string,
-  args: Record<string, unknown> | string
-): Promise<unknown> {
-  try {
-    const { lookupToolCache } = require("./optimization/client") as typeof import("./optimization/client");
-    return await lookupToolCache(toolName, args);
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Default export (fluiq namespace object)
 // ---------------------------------------------------------------------------
 
 const fluiq = {
   instrument,
-  optimize,
   eval: fluiqEval,
   secure,
   trace,
   fetchPrompt,
-  lookupToolResult,
   Prompt,
   FluiqSecurityError,
   FluiqEvalError,

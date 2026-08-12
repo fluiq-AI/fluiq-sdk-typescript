@@ -10,8 +10,6 @@ export interface FluiqConfig {
   secure: boolean;
   secure_mode: "warn" | "block";
   secure_guardrail: string;
-  optimize: boolean;
-  optimize_mode: "cache" | "observe";
   eval: boolean;
   eval_mode: "warn" | "block";
   eval_metrics: string[] | null;
@@ -28,8 +26,6 @@ export const _config: FluiqConfig = {
   secure: false,
   secure_mode: "warn",
   secure_guardrail: "default",
-  optimize: false,
-  optimize_mode: "cache",
   eval: false,
   eval_mode: "warn",
   eval_metrics: null,

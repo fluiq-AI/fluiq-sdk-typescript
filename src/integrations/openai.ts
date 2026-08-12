@@ -15,8 +15,6 @@ import {
   isInLangchainLlm,
 } from "./shared/context";
 import { preCallGuard } from "./shared/securityGate";
-import { preCallOptimize } from "./shared/optimizeGate";
-import { learnFromOpenAIMessages } from "./shared/toolCache";
 import { FluiqSecurityError } from "../exceptions";
 
 /** Resolve a property off either a plain object or a class instance. */
@@ -467,34 +465,6 @@ export function patchOpenAI(): void {
           throw secExc;
         }
 
-        try {
-          learnFromOpenAIMessages(params["messages"]);
-        } catch {
-          // tool-cache learning must never break the call
-        }
-
-        const cached = await preCallOptimize(params, "openai");
-        if (cached != null) {
-          const end = Date.now() / 1000;
-          await logTrace({
-            type: "llm",
-            integration: TraceType.OpenAI,
-            api: "chat.completions",
-            trace_id: traceId,
-            model: params["model"],
-            messages: _toJsonable(params["messages"]),
-            tools: _toJsonable(params["tools"]),
-            response: cached["response"],
-            tool_calls: cached["tool_calls"],
-            mcp_calls: cached["mcp_calls"],
-            latency: end - start,
-            parent_id: currentParentId(),
-            _cache_hit: true,
-            tokens: null,
-          });
-          return _buildOpenAICachedResponse(cached, params);
-        }
-
         let response: unknown;
         try {
           response = await original.call(this, params, opts);
@@ -687,47 +657,6 @@ function _accumulateChunks(chunks: unknown[]): Accumulated {
   };
 }
 
-function _buildOpenAICachedResponse(
-  payload: Record<string, unknown>,
-  params: Record<string, unknown>
-): Record<string, unknown> {
-  const text = payload["response"] as string | null;
-  const toolCalls = payload["tool_calls"] as unknown[] | null;
-  const tcObjs = toolCalls?.map((tc) => {
-    const t = tc as Record<string, unknown>;
-    const fn = (t["function"] as Record<string, unknown>) ?? {};
-    return {
-      id: t["id"],
-      type: t["type"] ?? "function",
-      function: { name: fn["name"], arguments: fn["arguments"] ?? "" },
-    };
-  }) ?? null;
-
-  return {
-    choices: [
-      {
-        message: { content: text ?? null, role: "assistant", tool_calls: tcObjs ?? null, refusal: null },
-        finish_reason: tcObjs ? "tool_calls" : "stop",
-        index: 0,
-        logprobs: null,
-      },
-    ],
-    model: params["model"] ?? "",
-    id: "fluiq-cached",
-    object: "chat.completion",
-    // Served from cache — no provider call was made, so all token counts are 0.
-    // Use a zeroed object (not null) so caller code that reads e.g.
-    // `usage.prompt_tokens` or `usage.prompt_tokens_details.cached_tokens`
-    // doesn't throw on a cache hit.
-    usage: {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-      prompt_tokens_details: { cached_tokens: 0 },
-    },
-    _fluiq_cached: true,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Generic prototype patcher

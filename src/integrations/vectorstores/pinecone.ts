@@ -12,25 +12,12 @@ import {
   safeJsonable,
   truncateIds,
   vectorDim,
-  makeAsyncCachedWrapper,
-  makeAsyncInvalidatingWrapper,
   makeAsyncWrapper,
 } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function _pineconeTarget(
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  instance: unknown
-): string {
-  const inst = instance as Record<string, unknown>;
-  return String(
-    inst["name"] ?? inst["_index_name"] ?? (inst["config"] as Record<string, unknown> | null)?.["name"] ?? ""
-  );
-}
 
 function _target(instance: unknown, kwargs: Record<string, unknown>): Record<string, unknown> {
   const inst = instance as Record<string, unknown>;
@@ -200,46 +187,6 @@ function _summarizeUpdate(
   };
 }
 
-async function _queryCacheKey(
-  _args: unknown[],
-  kwargs: Record<string, unknown>,
-  instance: unknown
-): Promise<string> {
-  const inst = instance as Record<string, unknown>;
-  const idx = String(
-    inst["name"] ?? inst["_index_name"] ?? (inst["config"] as Record<string, unknown> | null)?.["name"] ?? ""
-  );
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return vectorstoreCacheKey(
-    "pinecone",
-    idx,
-    kwargs["vector"] ?? kwargs["id"],
-    (kwargs["topK"] ?? kwargs["top_k"]) as number,
-    kwargs["filter"] as unknown
-  );
-}
-
-function _queryMock(
-  cachedResult: Record<string, unknown>,
-  _args: unknown[],
-  kwargs: Record<string, unknown>,
-  _instance: unknown
-): unknown {
-  const items = ((cachedResult["matches"] as Record<string, unknown> | null)?.["items"] as Record<string, unknown>[] | null) ?? [];
-  const matches = items.map((m) => ({
-    id: m["id"] ?? "",
-    score: m["score"] ?? null,
-    metadata: m["metadata"] ?? null,
-    values: [],
-    sparse_values: null,
-  }));
-  return {
-    matches,
-    namespace: kwargs["namespace"] ?? "",
-    usage: null,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Patch
 // ---------------------------------------------------------------------------
@@ -251,9 +198,9 @@ function _patchIndex(cls: { prototype: Record<string, unknown> }): void {
   const proto = cls.prototype;
 
   if (typeof proto["query"] === "function") {
-    proto["query"] = makeAsyncCachedWrapper(
+    proto["query"] = makeAsyncWrapper(
       proto["query"] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-      TraceType.Pinecone, "query", _summarizeQuery, _queryCacheKey, _queryMock
+      TraceType.Pinecone, "query", _summarizeQuery
     );
   }
 
@@ -266,9 +213,9 @@ function _patchIndex(cls: { prototype: Record<string, unknown> }): void {
     ["deleteAll", "delete_all", _summarizeDeleteAll],
   ] as [string, string, typeof _summarizeUpsert][]) {
     if (typeof proto[attr] === "function") {
-      proto[attr] = makeAsyncInvalidatingWrapper(
+      proto[attr] = makeAsyncWrapper(
         proto[attr] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.Pinecone, api, summarize, _pineconeTarget
+        TraceType.Pinecone, api, summarize
       );
     }
   }

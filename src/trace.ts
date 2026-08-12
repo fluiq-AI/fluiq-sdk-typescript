@@ -52,46 +52,10 @@ function _buildWrapper<T extends (...args: unknown[]) => unknown>(
           })
         ).catch(() => {});
 
-      // Optimize path: serve a previously cached return value without running
-      // the function. lookupFunctionCache returns a wrapper object so a cached
-      // `null`/`undefined` result is distinguishable from a miss.
-      if (_config.optimize) {
-        let cached: Record<string, unknown> | null = null;
-        try {
-          const { lookupFunctionCache } = require("./optimization/client") as typeof import("./optimization/client");
-          cached = await lookupFunctionCache(funcName, argsKey);
-        } catch {
-          cached = null;
-        }
-        if (cached != null) {
-          const cachedResult = cached["result"];
-          const end = Date.now() / 1000;
-          await emitStart();
-          await logTrace(
-            toPlainObject({
-              trace_id: traceId,
-              parent_id: parentId,
-              integration: TraceType.GeneralFunction,
-              function: funcName,
-              type: "function",
-              input: argsKey,
-              output: _serializeResult(cachedResult),
-              latency: end - start,
-              success: true,
-              status: "success",
-              started_at: start,
-              _cache_hit: true,
-            })
-          ).catch(() => {});
-          return cachedResult;
-        }
-      }
-
       await emitStart();
 
       let innerResult: unknown;
       let exc: Error | null = null;
-      let cacheHit = false;
 
       const { promise } = runInChildContext(traceId, async () => {
         innerResult = await (fn as (...a: unknown[]) => Promise<unknown>).apply(this, args);
@@ -99,24 +63,14 @@ function _buildWrapper<T extends (...args: unknown[]) => unknown>(
       });
 
       try {
-        const { result, ctx } = await promise;
+        const { result } = await promise;
         innerResult = result;
-        cacheHit = ctx.innerCacheHit;
       } catch (e) {
         exc = e as Error;
       }
 
       const end = Date.now() / 1000;
       const success = exc === null;
-
-      if (_config.optimize && success) {
-        try {
-          const { populateFunctionCache } = require("./optimization/client") as typeof import("./optimization/client");
-          await populateFunctionCache(funcName, argsKey, innerResult);
-        } catch {
-          // caching must never crash the traced function
-        }
-      }
 
       await logTrace(
         toPlainObject({
@@ -131,7 +85,6 @@ function _buildWrapper<T extends (...args: unknown[]) => unknown>(
           success,
           status: success ? "success" : "error",
           started_at: start,
-          ...(cacheHit ? { _cache_hit: true } : {}),
         })
       ).catch(() => {});
 

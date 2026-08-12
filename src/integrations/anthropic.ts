@@ -14,8 +14,6 @@ import {
   isInLangchainLlm,
 } from "./shared/context";
 import { preCallGuard } from "./shared/securityGate";
-import { preCallOptimize } from "./shared/optimizeGate";
-import { learnFromAnthropicMessages } from "./shared/toolCache";
 import { FluiqSecurityError } from "../exceptions";
 
 // ---------------------------------------------------------------------------
@@ -94,49 +92,6 @@ function _cacheCreationTokens(usage: unknown): number | null {
     ? (usage as Record<string, unknown>)["cache_creation_input_tokens"]
     : undefined;
   return typeof v === "number" ? v : null;
-}
-
-// Prompt cache_control injection (when fluiq.optimize() is active) -------------
-
-function maybeInjectAnthropicCacheControl(params: Record<string, unknown>): void {
-  if (!_config.optimize) return;
-  _injectSystem(params);
-  _injectLastTool(params);
-}
-
-function _injectSystem(params: Record<string, unknown>): void {
-  const system = params["system"];
-  if (!system) return;
-  if (typeof system === "string") {
-    params["system"] = [
-      { type: "text", text: system, cache_control: { type: "ephemeral" } },
-    ];
-    return;
-  }
-  if (Array.isArray(system)) {
-    const newSystem = [...system];
-    for (let i = newSystem.length - 1; i >= 0; i--) {
-      const block = newSystem[i];
-      if (block && typeof block === "object" && !Array.isArray(block)) {
-        const b = block as Record<string, unknown>;
-        if (b["type"] === "text" && !b["cache_control"]) {
-          newSystem[i] = { ...b, cache_control: { type: "ephemeral" } };
-          break;
-        }
-      }
-    }
-    params["system"] = newSystem;
-  }
-}
-
-function _injectLastTool(params: Record<string, unknown>): void {
-  const tools = params["tools"];
-  if (!Array.isArray(tools) || tools.length === 0) return;
-  const last = tools[tools.length - 1];
-  if (!last || typeof last !== "object" || Array.isArray(last)) return;
-  const b = last as Record<string, unknown>;
-  if (b["cache_control"]) return;
-  params["tools"] = [...tools.slice(0, -1), { ...b, cache_control: { type: "ephemeral" } }];
 }
 
 const MEDIA_TYPES = new Set(["image", "document", "tool_result", "tool_use"]);
@@ -440,40 +395,6 @@ async function _runTracedMessagesCreate(
         await _emitSecurityBlockedTrace(params, secExc, start, Date.now() / 1000);
       }
       throw secExc;
-    }
-
-    try {
-      learnFromAnthropicMessages(params["messages"]);
-    } catch {
-      /* tool-cache learning must never break the call */
-    }
-    try {
-      maybeInjectAnthropicCacheControl(params);
-    } catch {
-      /* cache_control injection is best-effort */
-    }
-
-    const cached = await preCallOptimize(params, "anthropic");
-    if (cached != null) {
-      const end = Date.now() / 1000;
-      await logTrace({
-        type: "llm",
-        integration: TraceType.Anthropic,
-        api: "messages",
-        trace_id: traceId,
-        model: params["model"],
-        messages: _toJsonable(params["messages"]),
-        system: _toJsonable(params["system"]),
-        tools: _toJsonable(params["tools"]),
-        response: cached["response"],
-        tool_uses: cached["tool_uses"],
-        mcp_calls: cached["mcp_calls"],
-        latency: end - start,
-        parent_id: currentParentId(),
-        _cache_hit: true,
-        tokens: null,
-      });
-      return { result: _buildAnthropicCachedResponse(cached, params), rawResponse: null };
     }
 
     // Call the original create. It returns an APIPromise; use `.withResponse()`
@@ -809,38 +730,3 @@ function _accumulateAnthropicChunks(chunks: unknown[]): AnthropicAccumulated {
   };
 }
 
-function _buildAnthropicCachedResponse(
-  payload: Record<string, unknown>,
-  params: Record<string, unknown>
-): Record<string, unknown> {
-  const text = payload["response"] as string | null;
-  const toolUses = payload["tool_uses"] as unknown[] | null;
-
-  const contentBlocks: unknown[] = [];
-  if (text) contentBlocks.push({ type: "text", text });
-  for (const tu of toolUses ?? []) {
-    const t = tu as Record<string, unknown>;
-    contentBlocks.push({ type: "tool_use", id: t["id"], name: t["name"], input: t["input"] });
-  }
-  if (contentBlocks.length === 0) contentBlocks.push({ type: "text", text: "" });
-
-  return {
-    id: "fluiq-cached",
-    type: "message",
-    role: "assistant",
-    content: contentBlocks,
-    model: params["model"] ?? "",
-    stop_reason: toolUses ? "tool_use" : "end_turn",
-    stop_sequence: null,
-    // Served from cache — no provider call was made, so all token counts are 0.
-    // Use a zeroed object (not null) so caller code that reads e.g.
-    // `msg.usage.cache_read_input_tokens` doesn't throw on a cache hit.
-    usage: {
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 0,
-    },
-    _fluiq_cached: true,
-  };
-}

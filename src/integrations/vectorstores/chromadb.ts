@@ -14,18 +14,12 @@ import {
   safeJsonable,
   truncateIds,
   vectorCountAndDim,
-  makeAsyncCachedWrapper,
-  makeAsyncInvalidatingWrapper,
   makeAsyncWrapper,
 } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Target / summary helpers
 // ---------------------------------------------------------------------------
-
-function _chromaTarget(_args: unknown[], _kwargs: Record<string, unknown>, instance: unknown): string {
-  return String((instance as Record<string, unknown>)["name"] ?? "") || "";
-}
 
 function _target(instance: unknown): Record<string, unknown> {
   return { collection: (instance as Record<string, unknown>)["name"] ?? null };
@@ -158,59 +152,15 @@ function _summarizeDelete(
   };
 }
 
-async function _queryCacheKey(
-  _args: unknown[],
-  kwargs: Record<string, unknown>,
-  instance: unknown
-): Promise<string> {
-  const qt = kwargs["queryTexts"] ?? kwargs["queryEmbeddings"] ?? kwargs["query_texts"] ?? kwargs["query_embeddings"];
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return vectorstoreCacheKey(
-    "chromadb",
-    String((instance as Record<string, unknown>)["name"] ?? "") || "",
-    qt,
-    (kwargs["nResults"] ?? kwargs["n_results"]) as number,
-    kwargs["where"] as unknown
-  );
-}
-
-function _queryMock(
-  cachedResult: Record<string, unknown>,
-  _args: unknown[],
-  _kwargs: Record<string, unknown>,
-  _instance: unknown
-): Record<string, unknown> {
-  const items = ((cachedResult["matches"] as Record<string, unknown> | null)?.["items"] as Record<string, unknown>[] | null) ?? [];
-  const ids = [items.map((m) => m["id"])];
-  const docs = [items.map((m) => m["text"])];
-  const metas = [items.map((m) => m["metadata"])];
-  const dists = [items.map((m) => m["score"])];
-  return {
-    ids,
-    documents: docs,
-    metadatas: metas,
-    distances: dists,
-    embeddings: null,
-    data: null,
-    uris: null,
-    included: ["distances", "documents", "metadatas"],
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Patch functions
-// ---------------------------------------------------------------------------
-
-// The JS client's collection methods are all async (return Promises). The query
 // op walks the prototype chain (`count`/`delete`/`get` are inherited from a base
 // class), so `in` is used rather than `hasOwnProperty`.
 function _patchCollection(Collection: { prototype: Record<string, unknown> }): void {
   const proto = Collection.prototype;
 
   if ("query" in proto) {
-    proto["query"] = makeAsyncCachedWrapper(
+    proto["query"] = makeAsyncWrapper(
       proto["query"] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-      TraceType.ChromaDB, "query", _summarizeQuery, _queryCacheKey, _queryMock
+      TraceType.ChromaDB, "query", _summarizeQuery
     );
   }
 
@@ -221,9 +171,9 @@ function _patchCollection(Collection: { prototype: Record<string, unknown> }): v
     ["delete", "delete", _summarizeDelete],
   ] as [string, string, typeof _summarizeMutation][]) {
     if (attr in proto) {
-      proto[attr] = makeAsyncInvalidatingWrapper(
+      proto[attr] = makeAsyncWrapper(
         proto[attr] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.ChromaDB, api, summarize, _chromaTarget
+        TraceType.ChromaDB, api, summarize
       );
     }
   }

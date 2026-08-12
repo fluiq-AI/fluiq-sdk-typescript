@@ -11,22 +11,12 @@ import {
   safeJsonable,
   truncateIds,
   vectorDim,
-  makeAsyncCachedWrapper,
-  makeAsyncInvalidatingWrapper,
   makeAsyncWrapper,
 } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function _qdrantTarget(
-  args: unknown[],
-  kwargs: Record<string, unknown>,
-  _instance: unknown
-): string {
-  return String(kwargs["collection_name"] ?? (args.length > 0 ? args[0] : "") ?? "");
-}
 
 function _coll(args: unknown[], kwargs: Record<string, unknown>): unknown {
   return kwargs["collection_name"] ?? (args.length > 0 ? args[0] : null);
@@ -214,40 +204,6 @@ function _summarizeScroll(
   return out;
 }
 
-async function _searchCacheKey(
-  args: unknown[],
-  kwargs: Record<string, unknown>,
-  _instance: unknown
-): Promise<string> {
-  const coll = String(kwargs["collection_name"] ?? (args[0] ?? "") ?? "");
-  const vec = kwargs["vector"] ?? kwargs["query_vector"];
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return vectorstoreCacheKey("qdrant", coll, vec, kwargs["limit"] as number, (kwargs["filter"] ?? kwargs["query_filter"]) as unknown);
-}
-
-async function _queryPointsCacheKey(
-  args: unknown[],
-  kwargs: Record<string, unknown>,
-  _instance: unknown
-): Promise<string> {
-  const coll = String(kwargs["collection_name"] ?? (args[0] ?? "") ?? "");
-  const { vectorstoreCacheKey } = require("../../optimization/client") as typeof import("../../optimization/client");
-  return vectorstoreCacheKey("qdrant", coll, kwargs["query"], kwargs["limit"] as number, kwargs["query_filter"] as unknown);
-}
-
-function _makePointList(cachedResult: Record<string, unknown>): unknown[] {
-  const items = ((cachedResult["matches"] as Record<string, unknown> | null)?.["items"] as Record<string, unknown>[] | null) ?? [];
-  return items.map((m) => ({ id: m["id"], score: m["score"], payload: m["metadata"], vector: null }));
-}
-
-function _searchMock(cachedResult: Record<string, unknown>, ..._rest: unknown[]): unknown {
-  return _makePointList(cachedResult);
-}
-
-function _queryPointsMock(cachedResult: Record<string, unknown>, ..._rest: unknown[]): unknown {
-  return { points: _makePointList(cachedResult) };
-}
-
 // ---------------------------------------------------------------------------
 // Patch
 // ---------------------------------------------------------------------------
@@ -255,28 +211,18 @@ function _queryPointsMock(cachedResult: Record<string, unknown>, ..._rest: unkno
 function _patchAsync(cls: { prototype: Record<string, unknown> }): void {
   const proto = cls.prototype;
 
-  for (const [attr, api, summarize, keyFn, mockFn] of [
-    ["search", "search", _summarizeSearch, _searchCacheKey, _searchMock],
-    // JS SDK names this `query`; Python's is `query_points`. Patch whichever exists.
-    ["query", "query", _summarizeQueryPoints, _queryPointsCacheKey, _queryPointsMock],
-    ["query_points", "query_points", _summarizeQueryPoints, _queryPointsCacheKey, _queryPointsMock],
-  ] as [string, string, typeof _summarizeSearch, typeof _searchCacheKey, typeof _searchMock][]) {
-    if (attr in proto) {
-      proto[attr] = makeAsyncCachedWrapper(
-        proto[attr] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.Qdrant, api, summarize, keyFn, mockFn
-      );
-    }
-  }
-
   for (const [attr, api, summarize] of [
+    ["search", "search", _summarizeSearch],
+    // JS SDK names this `query`; Python's is `query_points`. Patch whichever exists.
+    ["query", "query", _summarizeQueryPoints],
+    ["query_points", "query_points", _summarizeQueryPoints],
     ["upsert", "upsert", _summarizeUpsert],
     ["delete", "delete", _summarizeDelete],
-  ] as [string, string, typeof _summarizeUpsert][]) {
+  ] as [string, string, typeof _summarizeSearch][]) {
     if (attr in proto) {
-      proto[attr] = makeAsyncInvalidatingWrapper(
+      proto[attr] = makeAsyncWrapper(
         proto[attr] as (this: unknown, ...args: unknown[]) => Promise<unknown>,
-        TraceType.Qdrant, api, summarize, _qdrantTarget
+        TraceType.Qdrant, api, summarize
       );
     }
   }

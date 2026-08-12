@@ -13,8 +13,6 @@ import {
   isInLangchainLlm,
 } from "./shared/context";
 import { preCallGuard } from "./shared/securityGate";
-import { preCallOptimize } from "./shared/optimizeGate";
-import { learnFromGeminiContents } from "./shared/toolCache";
 import { FluiqSecurityError } from "../exceptions";
 
 // ---------------------------------------------------------------------------
@@ -443,33 +441,6 @@ function _patchModelsPrototype(Models: { prototype: Record<string, unknown> }): 
             throw secExc;
           }
 
-          try {
-            learnFromGeminiContents(params["contents"]);
-          } catch {
-            /* tool-cache learning must never break the call */
-          }
-
-          const cached = await preCallOptimize(params, "gemini");
-          if (cached != null) {
-            const end = Date.now() / 1000;
-            await logTrace({
-              type: "llm",
-              integration: TraceType.Gemini,
-              api: "generate_content",
-              trace_id: traceId,
-              model: _getModel(params),
-              contents: _toJsonable(params["contents"]),
-              response: cached["response"],
-              function_calls: cached["function_calls"],
-              mcp_calls: cached["mcp_calls"],
-              latency: end - start,
-              parent_id: currentParentId(),
-              _cache_hit: true,
-              tokens: null,
-            });
-            return _buildGeminiCachedResponse(cached);
-          }
-
           let response: unknown;
           try {
             response = await originalGenerate!.call(this, params);
@@ -544,12 +515,6 @@ function _patchModelsPrototype(Models: { prototype: Record<string, unknown> }): 
           throw secExc;
         }
 
-        try {
-          learnFromGeminiContents(params["contents"]);
-        } catch {
-          /* tool-cache learning must never break the call */
-        }
-
         const toolCallLatencies = _computeToolCallLatencies(params["contents"]);
         // The public field delegates to an async `*Internal` that returns a
         // Promise<AsyncIterable>; older versions return the iterable directly.
@@ -612,31 +577,6 @@ function _patchModelsPrototype(Models: { prototype: Record<string, unknown> }): 
   }
 }
 
-function _buildGeminiCachedResponse(
-  payload: Record<string, unknown>
-): Record<string, unknown> {
-  const text = payload["response"] as string | null;
-  const functionCalls = payload["function_calls"] as unknown[] | null;
-
-  const parts: unknown[] = [];
-  if (text) parts.push({ text });
-  for (const fc of functionCalls ?? []) {
-    parts.push({ function_call: fc });
-  }
-  if (parts.length === 0) parts.push({ text: "" });
-
-  return {
-    candidates: [
-      {
-        content: { parts, role: "model" },
-        finish_reason: functionCalls?.length ? "FUNCTION_CALL" : "STOP",
-        index: 0,
-      },
-    ],
-    usage_metadata: null,
-    _fluiq_cached: true,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Models resolver (shared across genai patches)
