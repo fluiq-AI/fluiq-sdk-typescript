@@ -3,6 +3,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
 
+> **Status: archived.** Fluiq ran from 10 April to September 2026 and never
+> found customers. The hosted service is shut down and the infrastructure is
+> gone. The code is MIT and stays public because it works. Nothing here is
+> maintained — fork it freely.
+>
+> The rest of the project: [fluiq-api](https://github.com/fluiq-AI/fluiq-api) ·
+> [tracer](https://github.com/fluiq-AI/fluiq-worker-tracer) ·
+> [evaluator](https://github.com/fluiq-AI/fluiq-worker-evaluator) ·
+> [security](https://github.com/fluiq-AI/fluiq-worker-security) ·
+> [Python SDK](https://github.com/fluiq-AI/fluiq-sdk) ·
+> [TypeScript SDK](https://github.com/fluiq-AI/fluiq-sdk-typescript) ·
+> [guardrail-bench](https://github.com/SaurabhKumbhar24/guardrail-bench)
+
 Instrument any LLM application in two lines. Auto-tracing for OpenAI, Anthropic, Gemini, LangChain, LangGraph, Google ADK, MCP, and all major vector stores — plus a `trace()` wrapper for everything else. Every run is cost-tracked in your dashboard. Add one more line to enable security scanning, evaluation, or Redis caching.
 
 ---
